@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/saskcan/finance/common"
+	"github.com/saskcan/common/types"
 )
 
 // dataRow represents a parsed row from the csv format provided by Yahoo Finance
@@ -25,7 +25,7 @@ type dataRow struct {
 }
 
 // RetrieveData retrieves data for the given product, frequency and dates
-func RetrieveData(sym common.Symbol, freq common.Frequency, rng common.DateRange) ([]*common.Candle, error) {
+func RetrieveData(sym types.Symbol, freq types.Frequency, rng types.DateRange) ([]*types.Candle, error) {
 	if sym == "" {
 		return nil, errors.New("sym missing")
 	}
@@ -41,11 +41,9 @@ func RetrieveData(sym common.Symbol, freq common.Frequency, rng common.DateRange
 	}
 
 	resp, err := client.Get(reqURL.String())
-
 	if err != nil {
 		return nil, err
 	}
-
 	defer resp.Body.Close()
 
 	bodyBites, err := ioutil.ReadAll(resp.Body)
@@ -55,7 +53,7 @@ func RetrieveData(sym common.Symbol, freq common.Frequency, rng common.DateRange
 
 	if resp.StatusCode != http.StatusOK {
 		errorBody := string(bodyBites)
-		return nil, errors.New(fmt.Sprintf("Expected a status code of %v but got %v; Body is: %s", http.StatusOK, resp.StatusCode, errorBody))
+		return nil, fmt.Errorf("Expected a status code of %v but got %v; Body is: %s", http.StatusOK, resp.StatusCode, errorBody)
 	}
 
 	csv := string(bodyBites)
@@ -65,7 +63,7 @@ func RetrieveData(sym common.Symbol, freq common.Frequency, rng common.DateRange
 		return nil, err
 	}
 
-	var candles []*common.Candle
+	var candles []*types.Candle
 
 	for _, row := range dataRows {
 		candle, err := makeCandle(sym, freq, *row)
@@ -79,7 +77,7 @@ func RetrieveData(sym common.Symbol, freq common.Frequency, rng common.DateRange
 }
 
 // makeRequestURL builds a URL for the symbol, frequency and date range provided
-func makeRequestURL(sym common.Symbol, freq common.Frequency, rng common.DateRange) (*url.URL, error) {
+func makeRequestURL(sym types.Symbol, freq types.Frequency, rng types.DateRange) (*url.URL, error) {
 	if sym == "" {
 		return nil, errors.New("sym missing")
 	}
@@ -101,17 +99,17 @@ func makeRequestURL(sym common.Symbol, freq common.Frequency, rng common.DateRan
 }
 
 // getFrequencyCode returns the correct value for the queryparam given a frequency
-func getFrequencyCode(freq common.Frequency) (string, error) {
+func getFrequencyCode(freq types.Frequency) (string, error) {
 	switch freq {
-	case common.MINUTE:
+	case types.MINUTE:
 		return "1m", nil
-	case common.HOUR:
+	case types.HOUR:
 		return "1h", nil
-	case common.DAY:
+	case types.DAY:
 		return "1d", nil
-	case common.MONTH:
+	case types.MONTH:
 		return "1mo", nil
-	case common.YEAR: // might not be supported
+	case types.YEAR: // might not be supported
 		return "year", nil
 	default:
 		return "", errors.New("Invalid freq")
@@ -178,7 +176,7 @@ func parseCSV(input string) ([]*dataRow, error) {
 func parseRow(r []string) (*dataRow, error) {
 	const numFields = 7 // date, open, high, low, close, adjClose, volume
 	if len(r) != numFields {
-		return nil, errors.New(fmt.Sprintf("Was expecting %d fields, but found %d", numFields, len(r)))
+		return nil, fmt.Errorf("Was expecting %d fields, but found %d", numFields, len(r))
 	}
 
 	startTime, err := parseDate(r[0])
@@ -241,12 +239,12 @@ func parsePrice(input string) (float32, error) {
 }
 
 // makeCandle returns a pointer to a Candle given a symbol, frequency and dataRow
-func makeCandle(sym common.Symbol, freq common.Frequency, row dataRow) (*common.Candle, error) {
+func makeCandle(sym types.Symbol, freq types.Frequency, row dataRow) (*types.Candle, error) {
 	if sym == "" {
 		return nil, errors.New("Missing sym")
 	}
 
-	return &common.Candle{
+	return &types.Candle{
 		Open:      row.Open,
 		High:      row.High,
 		Low:       row.Low,
