@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/saskcan/common/types"
+	"github.com/saskcan/hoagie/types"
 )
 
 // dataRow represents a parsed row from the csv format provided by Yahoo Finance
@@ -22,19 +22,21 @@ type dataRow struct {
 	Low       float32
 	Close     float32
 	StartTime time.Time
+	Volume    uint
 }
 
 // RetrieveData retrieves data for the given product, frequency and dates
-func RetrieveData(sym types.Symbol, freq types.Frequency, rng types.DateRange) ([]*types.Candle, error) {
+func RetrieveData(sym string, freq string, start time.Time, end time.Time) ([]*types.Candle, error) {
 	if sym == "" {
 		return nil, errors.New("sym missing")
 	}
 
-	reqURL, err := makeRequestURL(sym, freq, rng)
+	reqURL, err := makeRequestURL(sym, freq, start, end)
 	if err != nil {
 		return nil, err
 	}
 
+	fmt.Printf("URL is: %v\n", reqURL.String())
 	client, err := getClient(reqURL)
 	if err != nil {
 		return nil, err
@@ -65,7 +67,12 @@ func RetrieveData(sym types.Symbol, freq types.Frequency, rng types.DateRange) (
 
 	var candles []*types.Candle
 
-	for _, row := range dataRows {
+	for i, row := range dataRows {
+		// last two candles are always incomplete
+		if i == (len(dataRows) - 2) {
+			fmt.Printf("broke for index: %d\n", i)
+			break
+		}
 		candle, err := makeCandle(sym, freq, *row)
 		if err != nil {
 			return nil, err
@@ -77,7 +84,7 @@ func RetrieveData(sym types.Symbol, freq types.Frequency, rng types.DateRange) (
 }
 
 // makeRequestURL builds a URL for the symbol, frequency and date range provided
-func makeRequestURL(sym types.Symbol, freq types.Frequency, rng types.DateRange) (*url.URL, error) {
+func makeRequestURL(sym string, freq string, start time.Time, end time.Time) (*url.URL, error) {
 	if sym == "" {
 		return nil, errors.New("sym missing")
 	}
@@ -88,7 +95,7 @@ func makeRequestURL(sym types.Symbol, freq types.Frequency, rng types.DateRange)
 	}
 
 	// queryparam crumb must match cookie in client and was discovered through inspection of the web browser
-	rawurl := fmt.Sprintf("https://query1.finance.yahoo.com/v7/finance/download/%s?period1=%d&period2=%d&interval=%s&events=history&crumb=t5/yumui8w6", sym, rng.Start.Unix(), rng.End.Unix(), frqCode)
+	rawurl := fmt.Sprintf("https://query1.finance.yahoo.com/v7/finance/download/%s.TO?period1=%d&period2=%d&interval=%s&events=history&crumb=t5/yumui8w6", sym, start.Unix(), end.Unix(), frqCode)
 
 	parsedURL, err := url.Parse(rawurl)
 	if err != nil {
@@ -99,17 +106,17 @@ func makeRequestURL(sym types.Symbol, freq types.Frequency, rng types.DateRange)
 }
 
 // getFrequencyCode returns the correct value for the queryparam given a frequency
-func getFrequencyCode(freq types.Frequency) (string, error) {
+func getFrequencyCode(freq string) (string, error) {
 	switch freq {
-	case types.MINUTE:
+	case "minute":
 		return "1m", nil
-	case types.HOUR:
+	case "hour":
 		return "1h", nil
-	case types.DAY:
+	case "day":
 		return "1d", nil
-	case types.MONTH:
+	case "month":
 		return "1mo", nil
-	case types.YEAR: // might not be supported
+	case "year": // might not be supported
 		return "year", nil
 	default:
 		return "", errors.New("Invalid freq")
@@ -204,12 +211,15 @@ func parseRow(r []string) (*dataRow, error) {
 		return nil, err
 	}
 
+	vol, err := parseVolume(r[6])
+
 	res := dataRow{
 		Open:      open,
 		High:      high,
 		Low:       low,
 		Close:     close,
 		StartTime: *startTime,
+		Volume:    vol,
 	}
 
 	return &res, nil
@@ -229,7 +239,6 @@ func parseDate(date string) (*time.Time, error) {
 
 // parsePrice parses a string into a float32
 func parsePrice(input string) (float32, error) {
-
 	val, err := strconv.ParseFloat(input, 32)
 	if err != nil {
 		return 0, err
@@ -238,8 +247,17 @@ func parsePrice(input string) (float32, error) {
 	return float32(val), nil
 }
 
+func parseVolume(input string) (uint, error) {
+	val, err := strconv.ParseUint(input, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+
+	return uint(val), nil
+}
+
 // makeCandle returns a pointer to a Candle given a symbol, frequency and dataRow
-func makeCandle(sym types.Symbol, freq types.Frequency, row dataRow) (*types.Candle, error) {
+func makeCandle(sym string, freq string, row dataRow) (*types.Candle, error) {
 	if sym == "" {
 		return nil, errors.New("Missing sym")
 	}
@@ -249,8 +267,10 @@ func makeCandle(sym types.Symbol, freq types.Frequency, row dataRow) (*types.Can
 		High:      row.High,
 		Low:       row.Low,
 		Close:     row.Close,
-		StartTime: row.StartTime,
+		Date:      row.StartTime,
 		Symbol:    sym,
 		Frequency: freq,
+		Volume:    row.Volume,
+		//Exchange:  "tsx",
 	}, nil
 }

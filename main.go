@@ -6,33 +6,42 @@ import (
 	"log"
 	"time"
 
-	"github.com/saskcan/finance/common"
-	"github.com/saskcan/finance/hoagie/yahooFinance"
+	"github.com/saskcan/hoagie/yahooFinance"
+	uuid "github.com/satori/go.uuid"
 	"github.com/streadway/amqp"
 )
 
 // maximum frequency for requests to avoid overusage errors
 const maxRequestFrequency time.Duration = time.Duration(1) * time.Second
 
-func failOnError(err error, msg string) {
-	if err != nil {
-		log.Fatalf("%s: %s", msg, err)
+// CandlesSinceDateRequest represents a request to retrieve candles since the date provided
+type CandlesSinceDateRequest struct {
+	ProductID uuid.UUID `json:"product_id"`
+	Symbol    string    `json:"symbol"`
+	Exchange  string    `json:"exchange"`
+	Frequency string    `json:"frequency"`
+	Date      string    `json:"date"`
+}
 
-		panic(fmt.Sprintf("%s: %s", msg, err))
-	}
+// Job represents a request to do work
+type Job struct {
+	Type string                  `json:"type"`
+	Data CandlesSinceDateRequest `json:"data"`
 }
 
 func main() {
-	conn, err := amqp.Dial("amqp://guest:guest@localhost:5672/")
-
-	failOnError(err, "Failed to connect to RabbitMQ")
-
+	conn, err := amqp.Dial("amqp://localhost:5672/")
+	if err != nil {
+		fmt.Printf("Could not connect to rabbitMQ\n")
+		return
+	}
 	defer conn.Close()
 
 	ch, err := conn.Channel()
-
-	failOnError(err, "Failed to open a channel")
-
+	if err != nil {
+		fmt.Printf("Could not connect to channel\n")
+		return
+	}
 	defer ch.Close()
 
 	// jobs queue
@@ -44,7 +53,10 @@ func main() {
 		false,  // no-wait
 		nil,    // arguments
 	)
-	failOnError(err, "Failed to declare a queue")
+	if err != nil {
+		fmt.Printf("Could not declare queue\n")
+		return
+	}
 
 	msgs, err := ch.Consume(
 		jobsQueue.Name, // queue
@@ -55,7 +67,10 @@ func main() {
 		false,          // no-wait
 		nil,            // args
 	)
-	failOnError(err, "Failed to register a consumer")
+	if err != nil {
+		fmt.Printf("Failed to register a consumer\n")
+		return
+	}
 
 	// data queue
 	dataQueue, err := ch.QueueDeclare(
@@ -66,33 +81,65 @@ func main() {
 		false,  // no-wait
 		nil,    // arguments
 	)
-	failOnError(err, "Failed to declare a queue")
+	if err != nil {
+		fmt.Printf("Failed to register a consumer")
+		return
+	}
 
-	var lastJobTime time.Time = time.Now()
+	var lastJobTime = time.Now()
 	//var queuedJobs []*common.Job
 
 	forever := make(chan bool)
 
 	go func() {
 		for d := range msgs {
-			job := new(common.Job)
+			var job Job
 			//fmt.Printf("%v", string(d.Body))
-			err := json.Unmarshal(d.Body, job)
-			failOnError(err, "Failed to unmarshal the message")
-			log.Printf("Received a job: %v", job)
+			//fmt.Printf("%s\n", string(d.Body))
+			err := json.Unmarshal(d.Body, &job)
+			if err != nil {
+				fmt.Printf("Failed to unmarshal message: %v\n", err)
+				continue
+			}
+
+			if job.Type != "CandlesSinceDateRequest" {
+				fmt.Printf("Was expecting CandlesSinceDateRequest but got %s\n", job.Type)
+				continue
+			}
+
+			log.Printf("Received a job: %v", job.Data)
 
 			// do not exceed maxRequestFrequency
 			earliestStartTime := lastJobTime.Add(maxRequestFrequency)
 			time.Sleep(time.Until(earliestStartTime))
 			lastJobTime = time.Now()
 
-			candles, err := yahooFinance.RetrieveData(job.Symbol, job.Frequency, job.Range)
-			failOnError(err, "Failed to retrieve data from Yahoo Finance")
+			// stubbed
+			s, err := time.Parse("2006-01-02T15:04:05Z", job.Data.Date)
+			if err != nil {
+				fmt.Printf("Could not parse date: %v", err)
+			}
+
+			candles, err := yahooFinance.RetrieveData(job.Data.Symbol, job.Data.Frequency, s, time.Now())
+			if err != nil {
+				fmt.Printf("Could not retrieve data from Yahoo Finance: %v", err)
+				continue
+			}
+
+			// fmt.Print(candles)
+
+			//fmt.Printf("Symbol: %s Frequency: %s Start: %v End: %v\n", job.Data.Symbol, job.Data.Frequency, job.Data.Date, time.Now())
 
 			for _, candle := range candles {
+				// set key for reference by consumer
+				candle.ProductID = job.Data.ProductID
+				// fmt.Printf("ID is %v\n", candle.ProductID)
 
 				dataBytes, err := json.Marshal(&candle)
-				failOnError(err, "Could not marshal candle to json")
+				if err != nil {
+					fmt.Printf("Could not marshal json: %v", candle)
+					break
+				}
 
 				err = ch.Publish(
 					"",             // exchange
@@ -103,7 +150,10 @@ func main() {
 						ContentType: "application/json",
 						Body:        dataBytes,
 					})
-				failOnError(err, "Could not publish to channel")
+				if err != nil {
+					fmt.Printf("Could not send to queue")
+					break
+				}
 			}
 		}
 	}()
